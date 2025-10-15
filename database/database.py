@@ -31,7 +31,31 @@ class Rohit:
         self.fsub_data = self.database['fsub']   
         self.rqst_fsub_data = self.database['request_forcesub']
         self.rqst_fsub_Channel_data = self.database['request_forcesub_channel']
+        self.file_store = self.database['file_store']
         
+# ======================
+    # FILE STORE MANAGEMENT
+    # ======================
+
+    async def set_file(self, key: str, chat_id: int, file_id: int):
+        """Bind a file to a key (number)."""
+        await self.file_store.update_one(
+            {"key": key},
+            {"$set": {"chat_id": chat_id, "file_id": file_id}},
+            upsert=True
+        )
+
+    async def get_file(self, key: str):
+        """Get a file record by key."""
+        return await self.file_store.find_one({"key": key})
+
+    async def delete_file(self, key: str):
+        """Delete a stored file by key."""
+        return await self.file_store.delete_one({"key": key})
+
+    async def list_files(self):
+        """List all stored files."""
+        return await self.file_store.find().to_list(length=None)
 
 
     # USER DATA
