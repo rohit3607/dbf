@@ -153,7 +153,7 @@ def get_readable_time(seconds: int) -> str:
 
 
 def get_exp_time(seconds):
-    periods = [('days', 86400), ('hours', 3600), ('mins', 60), ('secs', 1)]
+    periods = [('ᴅᴀʏs', 86400), ('ʜᴏᴜʀs', 3600), ('ᴍɪɴs', 60), ('sᴇᴄs', 1)]
     result = ''
     for period_name, period_seconds in periods:
         if seconds >= period_seconds:
