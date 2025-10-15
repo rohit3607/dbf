@@ -6,7 +6,6 @@ import motor.motor_asyncio
 import time
 import pymongo, os
 from config import DB_URI, DB_NAME
-from bot import Bot
 import logging
 from datetime import datetime, timedelta
 
