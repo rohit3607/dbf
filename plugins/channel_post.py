@@ -17,14 +17,33 @@ async def send_saved_file(client: Bot, message: Message):
 
     data = await db.get_file(text)
     if not data:
-        return #await message.reply_text("❌ No file set for this number.")
+        return await message.reply_text("❌ No file set for this number.")
 
     try:
-        await client.copy_message(
+        # Send file to user
+        sent = await client.copy_message(
             chat_id=message.chat.id,
             from_chat_id=data["chat_id"],
             message_id=data["file_id"]
         )
+
+        # Check auto-delete timer
+        FILE_AUTO_DELETE = await db.get_del_timer()
+
+        if FILE_AUTO_DELETE > 0:
+            notification_msg = await message.reply(
+                f"<b>Tʜɪs Fɪʟᴇ ᴡɪʟʟ ʙᴇ Dᴇʟᴇᴛᴇᴅ ɪɴ {get_exp_time(FILE_AUTO_DELETE)}.\n"
+                f"Pʟᴇᴀsᴇ sᴀᴠᴇ ᴏʀ ғᴏʀᴡᴀʀᴅ ɪᴛ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ʙᴇғᴏʀᴇ ɪᴛ ɢᴇᴛs Dᴇʟᴇᴛᴇᴅ.</b>"
+            )
+
+            # Wait and delete file + notification
+            await sleep(FILE_AUTO_DELETE)
+            try:
+                await sent.delete()
+                await notification_msg.delete()
+            except:
+                pass
+
     except Exception as e:
         await message.reply_text(f"⚠️ Failed to send file:\n`{e}`")
 
