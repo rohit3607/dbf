@@ -26,7 +26,6 @@ from config import *
 from helper_func import *
 from database.database import *
 
-
 #=====================================================================================##
 
 REPLY_ERROR = "<code>Use this command as a reply to any telegram message without any spaces.</code>"
@@ -199,22 +198,6 @@ async def auto_delete(sent_msg, duration):
 #
 # All rights reserved.
 #
-
-import asyncio
-import os
-import random
-import sys
-import time
-from datetime import datetime, timedelta
-from pyrogram import Client, filters, __version__
-from pyrogram.enums import ParseMode, ChatAction
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ReplyKeyboardMarkup, ChatInviteLink, ChatPrivileges
-from pyrogram.errors.exceptions.bad_request_400 import UserNotParticipant
-from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated, UserNotParticipant
-from bot import Bot
-from config import *
-from helper_func import *
-from database.database import *
 
 
 
