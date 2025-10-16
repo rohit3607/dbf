@@ -161,25 +161,65 @@ async def delete_file_cmd(client: Bot, message: Message):
 # =========================
 # /setfile Command (Supports Multiple Files per Key)
 # =========================
+# =========================
+# /setfile Command (Multi-message/File Batch)
+# =========================
 @Bot.on_message(filters.command("setfile") & filters.private & admin)
 async def set_file_cmd(client: Bot, message: Message):
     if len(message.command) != 2:
-        return await message.reply_text("⚠️ Usage:\n`/setfile <number>`\nTʜᴇɴ ʀᴇᴘʟʏ ᴛᴏ ᴀ ғɪʟᴇ.")
+        return await message.reply_text(
+            "⚠️ Usage:\n`/setfile <number>`\nTʜᴇɴ sᴇɴᴅ ᴍᴜʟᴛɪᴘʟᴇ ғɪʟᴇs/messages."
+        )
 
     key = message.command[1].strip()
     if not key.isdigit():
         return await message.reply_text("❌ Oɴʟʏ ɴᴜᴍʙᴇʀs ᴀʀᴇ ᴀʟʟᴏᴡᴇᴅ ᴀs ᴋᴇʏs.")
 
-    if not message.reply_to_message:
-        return await message.reply_text("❌ Rᴇᴘʟʏ ᴛᴏ ᴀ ғɪʟᴇ ᴛᴏ ʙɪɴᴅ ɪᴛ.")
+    collected = []
+    STOP_KEYBOARD = ReplyKeyboardMarkup([["STOP"]], resize_keyboard=True)
 
-    file_msg = message.reply_to_message
-    if not (file_msg.document or file_msg.video or file_msg.audio or file_msg.photo):
-        return await message.reply_text("❌ Oɴʟʏ ᴍᴇᴅɪᴀ (ᴠɪᴅᴇᴏ, ᴅᴏᴄᴜᴍᴇɴᴛ, ᴀᴜᴅɪᴏ, ᴘʜᴏᴛᴏ) sᴜᴘᴘᴏʀᴛᴇᴅ.")
+    await message.reply(
+        "Send all messages/files you want to include under this key.\n\n"
+        "Press STOP when you're done.",
+        reply_markup=STOP_KEYBOARD
+    )
 
-    # Append the new file ID to existing key
-    await db.add_file_to_key(key, file_msg.chat.id, file_msg.id)
-    await message.reply_text(f"✅ Fɪʟᴇ ᴀᴅᴅᴇᴅ ᴜɴᴅᴇʀ ᴋᴇʏ `{key}`.")
+    while True:
+        try:
+            user_msg = await client.ask(
+                chat_id=message.chat.id,
+                text="Waiting for files/messages...\nPress STOP to finish.",
+                timeout=30  # Wait 30 seconds for each message
+            )
+        except asyncio.TimeoutError:
+            break
+
+        # Stop condition
+        if user_msg.text and user_msg.text.strip().upper() == "STOP":
+            break
+
+        # Only store media or text (optional: skip plain text if needed)
+        if not (user_msg.document or user_msg.video or user_msg.audio or user_msg.photo or user_msg.text):
+            await message.reply("❌ Unsupported message type, ignored.")
+            continue
+
+        try:
+            # Copy message to your DB channel
+            sent = await user_msg.copy(client.db_channel.id, disable_notification=True)
+            collected.append(sent.id)
+        except Exception as e:
+            await message.reply(f"❌ Failed to store message:\n<code>{e}</code>")
+
+    await message.reply("✅ Batch collection complete.", reply_markup=ReplyKeyboardRemove())
+
+    if not collected:
+        return await message.reply("❌ No messages were added to this key.")
+
+    # Save collected IDs under the key in MongoDB
+    for msg_id in collected:
+        await db.add_file_to_key(key, client.db_channel.id, msg_id)
+
+    await message.reply(f"✅ All collected messages/files saved under key `{key}`.")
 
 
 # =========================
