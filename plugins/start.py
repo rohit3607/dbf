@@ -159,8 +159,6 @@ async def start_command(client: Client, message: Message):
 # Ask Doubt on telegram @CodeflixSupport
 
 # Indian timezone (UTC+5:30)
-from datetime import datetime, timedelta, timezone
-
 IST = timezone(timedelta(hours=5, minutes=30))
 chat_data_cache = {}
 
@@ -173,7 +171,7 @@ async def not_joined(client: Client, message: Message):
     try:
         all_channels = await db.show_channels() or []
         if not all_channels:
-            return await temp.edit("<b>No channels configured.</b>")
+            return await temp.edit("<b>No channels configured for Force Sub.</b>")
 
         for total, chat_id in enumerate(all_channels, start=1):
             if not chat_id:
@@ -184,6 +182,7 @@ async def not_joined(client: Client, message: Message):
 
             if not await is_sub(client, user_id, chat_id):
                 try:
+                    # Use cached chat data if available
                     if chat_id in chat_data_cache:
                         data = chat_data_cache[chat_id]
                     else:
@@ -196,6 +195,7 @@ async def not_joined(client: Client, message: Message):
                     name = getattr(data, "title", "Unknown Group")
                     now_ist = datetime.now(IST)
 
+                    # Generate proper invite link
                     if mode == "on" and not getattr(data, "username", None):
                         invite = await client.create_chat_invite_link(
                             chat_id=chat_id,
@@ -226,15 +226,16 @@ async def not_joined(client: Client, message: Message):
                         f"<blockquote expandable><b>Rᴇᴀsᴏɴ:</b> {e}</blockquote>"
                     )
 
-        # Retry Button (safe)
-        if len(message.command) > 1:
-            buttons.append([
-                InlineKeyboardButton(
-                    text='♻️ Tʀʏ Aɢᴀɪɴ',
-                    url=f"https://t.me/{client.username}?start={message.command[1]}"
-                )
-            ])
+        # ✅ Retry Button (safe for text or command messages)
+        retry_url = f"https://t.me/{client.username}"
+        if getattr(message, "command", None) and len(message.command) > 1:
+            retry_url += f"?start={message.command[1]}"
 
+        buttons.append([
+            InlineKeyboardButton(text="♻️ Tʀʏ Aɢᴀɪɴ", url=retry_url)
+        ])
+
+        # ✅ Send final Force Sub message
         await message.reply_photo(
             photo=FORCE_PIC,
             caption=FORCE_MSG.format(
