@@ -73,8 +73,8 @@ async def start_command(client: Client, message: Message):
                     return await message.reply("⚠️ 𝖨𝗇𝗏𝖺𝗅𝗂𝖽 𝗍𝗈𝗄𝖾𝗇. 𝖯𝗅𝖾𝖺𝗌𝖾 /start 𝖺𝗀𝖺𝗂𝗇.")
 
                 await db.update_verify_status(id, is_verified=True, verified_time=time.time())
-                current = await db.get_verify_count(id)
-                await db.set_verify_count(id, current + 1)
+                #current = await db.get_verify_count(id)
+                #await db.set_verify_count(id, current + 1)
                 return await message.reply(
                     f"✅ 𝗧𝗼𝗸𝗲𝗻 𝘃𝗲𝗿𝗶𝗳𝗶𝗲𝗱! Vᴀʟɪᴅ ғᴏʀ {get_exp_time(VERIFY_EXPIRE)}"
                 )
