@@ -11,7 +11,7 @@ from config import *
 from pyrogram.errors.exceptions.bad_request_400 import UserNotParticipant
 from pyrogram.errors import FloodWait
 from database.database import *
-
+from shortzy import Shortzy
 
 
 #used for cheking if a user is admin ~Owner also treated as admin level
@@ -160,6 +160,13 @@ def get_exp_time(seconds):
             period_value, seconds = divmod(seconds, period_seconds)
             result += f'{int(period_value)} {period_name}'
     return result
+
+
+async def get_shortlink(url, api, link):
+    shortzy = Shortzy(api_key=api, base_site=url)
+    link = await shortzy.convert(link)
+    return link
+
 
 subscribed = filters.create(is_subscribed)
 admin = filters.create(check_admin)
