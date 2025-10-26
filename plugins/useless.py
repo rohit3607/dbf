@@ -267,40 +267,89 @@ async def delete_file_cmd(client: Bot, message: Message):
 async def send_saved_file(client: Bot, message: Message):
     user_id = message.from_user.id
 
-    # Ensure user present
+    # ✅ Add user if not already present
     if not await db.present_user(user_id):
         try:
             await db.add_user(user_id)
         except:
             pass
 
-    # Check if banned
+    # ⛔️ Check if user is banned
     banned_users = await db.get_ban_users()
     if user_id in banned_users:
         return await message.reply_text(
-            "<b>⛔️ You are banned from using this bot.</b>\n\n"
+            "<b>⛔️ You are Bᴀɴɴᴇᴅ from using this bot.</b>\n\n"
             "<i>Contact support if you think this is a mistake.</i>",
             reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton("Contact Support", url=BAN_SUPPORT)]]
             )
         )
 
-    # Check subscription
+    # ✅ Check Force Subscription
     if not await is_subscribed(client, user_id):
         return await not_joined(client, message)
+
+    # 🕓 File auto-delete time in seconds
+    FILE_AUTO_DELETE = await db.get_del_timer()
 
     text = message.text.strip()
     if text.startswith("/") or not text.isdigit():
         return
 
+    # 🔑 Token verification + Shortlink verification system
+    verify_status = await db.get_verify_status(user_id)
+
+    if SHORTLINK_URL or SHORTLINK_API:
+        # Check if token expired
+        if verify_status and verify_status.get("is_verified"):
+            if VERIFY_EXPIRE < (time.time() - verify_status["verified_time"]):
+                await db.update_verify_status(user_id, is_verified=False)
+
+        # Handle verification callback
+        if "verify_" in message.text:
+            try:
+                _, token = message.text.split("_", 1)
+            except:
+                return await message.reply("⚠️ Invalid verification format. Try /start again.")
+
+            if verify_status["verify_token"] != token:
+                return await message.reply("⚠️ Invalid token. Please /start again.")
+
+            await db.update_verify_status(user_id, is_verified=True, verified_time=time.time())
+            return await message.reply(
+                f"✅ 𝗧𝗼𝗸𝗲𝗻 𝘃𝗲𝗿𝗶𝗳𝗶𝗲𝗱! Vᴀʟɪᴅ ғᴏʀ {get_exp_time(VERIFY_EXPIRE)}"
+            )
+
+        # If user not verified
+        if not verify_status or not verify_status.get("is_verified"):
+            token = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+            await db.update_verify_status(user_id, verify_token=token, link="")
+            short_link = await get_shortlink(
+                SHORTLINK_URL,
+                SHORTLINK_API,
+                f'https://telegram.dog/{client.username}?start=verify_{token}'
+            )
+
+            btn = [
+                [InlineKeyboardButton("• ᴏᴘᴇɴ ʟɪɴᴋ •", url=short_link),
+                 InlineKeyboardButton("• ᴛᴜᴛᴏʀɪᴀʟ •", url=TUT_VID)],
+                [InlineKeyboardButton("• ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ •", callback_data="premium")]
+            ]
+            return await message.reply(
+                f"𝗬𝗼𝘂𝗿 𝘁𝗼𝗸𝗲𝗻 𝗵𝗮𝘀 𝗲𝘅𝗽𝗶𝗿𝗲𝗱 𝗼𝗿 𝗶𝘀 𝗺𝗶𝘀𝘀𝗶𝗻𝗴.\n\n"
+                f"<b>Tᴏᴋᴇɴ Tɪᴍᴇᴏᴜᴛ:</b> {get_exp_time(VERIFY_EXPIRE)}\n\n"
+                f"<b>ᴡʜᴀᴛ ɪs ᴛʜᴇ ᴛᴏᴋᴇɴ?</b>\n\n"
+                f"ᴛʜɪs ɪs ᴀɴ ᴀᴅ ᴛᴏᴋᴇɴ. ᴘᴀssɪɴɢ ᴏɴᴇ ᴀᴅ ᴀʟʟᴏᴡs ʏᴏᴜ ᴛᴏ ᴜsᴇ ᴛʜᴇ ʙᴏᴛ ғᴏʀ {get_exp_time(VERIFY_EXPIRE)}",
+                reply_markup=InlineKeyboardMarkup(btn)
+            )
+
+    # 📁 Handle saved file sending
     data = await db.get_file(text)
     if not data:
         return await message.reply_text("❌ No files found for this key.")
 
     try:
-        FILE_AUTO_DELETE = await db.get_del_timer()
         sent_msgs = []
-
         for fid in data["file_ids"]:
             sent = await client.send_cached_media(
                 chat_id=message.chat.id,
@@ -309,7 +358,7 @@ async def send_saved_file(client: Bot, message: Message):
             sent_msgs.append(sent)
 
         if FILE_AUTO_DELETE > 0:
-            notification_msg = await message.reply(
+            notify = await message.reply(
                 f"<b><blockquote>This file(s) will be deleted in {get_exp_time(FILE_AUTO_DELETE)}.\n"
                 f"Please save or forward them before they are removed.</blockquote></b>"
             )
@@ -320,9 +369,8 @@ async def send_saved_file(client: Bot, message: Message):
                     await s.delete()
                 except:
                     pass
-
             try:
-                await notification_msg.delete()
+                await notify.delete()
             except:
                 pass
 
