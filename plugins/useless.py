@@ -246,23 +246,13 @@ async def set_files_batch(client: Bot, message: Message):
         # Extract file ids (supports media groups by capturing each message)
         file_ids = _extract_file_ids(user_msg)
 
-        # If this message is part of a media group, fetch recent messages to collect the whole album
+        # If this message is part of a media group, fetch the full album reliably
         if user_msg.media_group_id:
-            mgid = user_msg.media_group_id
-            # short delay to let all parts arrive on the server
-            await asyncio.sleep(2)
             try:
-                history = await client.get_chat_history(chat_id=message.chat.id, limit=100)
+                msgs = await client.get_media_group(chat_id=message.chat.id, message_id=user_msg.id)
             except Exception:
-                history = []
-
-            msgs = [m for m in history if getattr(m, "media_group_id", None) == mgid and m.from_user and m.from_user.id == user_msg.from_user.id]
-
-            # ensure initial message is included
-            if user_msg not in msgs:
-                msgs.append(user_msg)
-
-            msgs = sorted(msgs, key=lambda m: m.message_id)
+                # fallback: include only the received message
+                msgs = [user_msg]
 
             file_ids = []
             for m in msgs:
