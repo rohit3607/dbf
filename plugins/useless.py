@@ -245,40 +245,37 @@ async def set_files_batch(client: Bot, message: Message):
 
         # Extract file ids (supports media groups by capturing each message)
         file_ids = _extract_file_ids(user_msg)
-        finish_early = False
 
-        # If this message is part of a media group, try to collect the rest of the group
+        # If this message is part of a media group, fetch recent messages to collect the whole album
         if user_msg.media_group_id:
             mgid = user_msg.media_group_id
-            # allow a short window to receive rest of the group (they usually arrive quickly)
-            while True:
-                try:
-                    more = await client.ask(chat_id=message.chat.id, text="Waiting for rest of media group...", timeout=1)
-                except asyncio.TimeoutError:
-                    break
-                if more.text and more.text.strip().upper() == "STOP":
-                    finish_early = True
-                    break
-                # include items that belong to the same media_group
-                if getattr(more, "media_group_id", None) == mgid and more.from_user.id == user_msg.from_user.id:
-                    file_ids.extend(_extract_file_ids(more))
-                else:
-                    # if it's a different message, ignore it (user can re-send if needed)
-                    continue
+            # short delay to let all parts arrive on the server
+            await asyncio.sleep(2)
+            try:
+                history = await client.get_chat_history(chat_id=message.chat.id, limit=100)
+            except Exception:
+                history = []
+
+            msgs = [m for m in history if getattr(m, "media_group_id", None) == mgid and m.from_user and m.from_user.id == user_msg.from_user.id]
+
+            # ensure initial message is included
+            if user_msg not in msgs:
+                msgs.append(user_msg)
+
+            msgs = sorted(msgs, key=lambda m: m.message_id)
+
+            file_ids = []
+            for m in msgs:
+                file_ids.extend(_extract_file_ids(m))
 
         if not file_ids:
             await message.reply("❌ Unsupported message type, ignored.")
-            if finish_early:
-                break
             continue
 
         for fid in file_ids:
             collected.append((message.chat.id, fid))
 
         await message.reply(f"✅ Added ({len(collected)} total)")
-
-        if finish_early:
-            break
 
     await message.reply("✅ Collection finished.", reply_markup=ReplyKeyboardRemove())
 
