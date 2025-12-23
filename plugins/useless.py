@@ -245,14 +245,40 @@ async def set_files_batch(client: Bot, message: Message):
 
         # Extract file ids (supports media groups by capturing each message)
         file_ids = _extract_file_ids(user_msg)
+        finish_early = False
+
+        # If this message is part of a media group, try to collect the rest of the group
+        if user_msg.media_group_id:
+            mgid = user_msg.media_group_id
+            # allow a short window to receive rest of the group (they usually arrive quickly)
+            while True:
+                try:
+                    more = await client.ask(chat_id=message.chat.id, text="Waiting for rest of media group...", timeout=1)
+                except asyncio.TimeoutError:
+                    break
+                if more.text and more.text.strip().upper() == "STOP":
+                    finish_early = True
+                    break
+                # include items that belong to the same media_group
+                if getattr(more, "media_group_id", None) == mgid and more.from_user.id == user_msg.from_user.id:
+                    file_ids.extend(_extract_file_ids(more))
+                else:
+                    # if it's a different message, ignore it (user can re-send if needed)
+                    continue
+
         if not file_ids:
             await message.reply("❌ Unsupported message type, ignored.")
+            if finish_early:
+                break
             continue
 
         for fid in file_ids:
             collected.append((message.chat.id, fid))
 
         await message.reply(f"✅ Added ({len(collected)} total)")
+
+        if finish_early:
+            break
 
     await message.reply("✅ Collection finished.", reply_markup=ReplyKeyboardRemove())
 
