@@ -40,8 +40,8 @@ START_PIC = os.environ.get("START_PIC", "https://telegra.ph/file/ec17880d61180d3
 FORCE_PIC = os.environ.get("FORCE_PIC", "https://telegra.ph/file/e292b12890b8b4b9dcbd1.jpg")
 #--------------------------------------------
 #--------------------------------------------
-SHORTLINK_URL = os.environ.get("SHORTLINK_URL", "hxlinks.com")
-SHORTLINK_API = os.environ.get("SHORTLINK_API", "db776b8f719608ff2e1febf5c9c43c03aa7151fa")
+SHORTLINK_URL = os.environ.get("SHORTLINK_URL", "linkshortify.com")
+SHORTLINK_API = os.environ.get("SHORTLINK_API", "75030042affaa59003346cb258e766b0fc490a3c")
 VERIFY_EXPIRE = int(os.environ.get('VERIFY_EXPIRE', 120)) # Add time in seconds
 TUT_VID = os.environ.get("TUT_VID","https://t.me/hwdownload/3")
 #--------------------------------------------
