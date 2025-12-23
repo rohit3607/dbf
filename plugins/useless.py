@@ -91,60 +91,158 @@ async def check_delete_time(client: Bot, message: Message):
 #=====================================================================================##
 
 # =========================
-# /setfile Command (Multi-file Input)
+# /setfile Command (Single-file / media-group support)
 # =========================
+
+def _extract_file_ids(msg: Message):
+    """Return a list of file_id(s) from supported media in a message."""
+    ids = []
+    if msg.document:
+        ids.append(msg.document.file_id)
+    if msg.video:
+        ids.append(msg.video.file_id)
+    if msg.audio:
+        ids.append(msg.audio.file_id)
+    if msg.photo:
+        ids.append(msg.photo[-1].file_id)
+    if msg.voice:
+        ids.append(msg.voice.file_id)
+    if msg.video_note:
+        ids.append(msg.video_note.file_id)
+    if msg.animation:
+        ids.append(msg.animation.file_id)
+    if msg.sticker:
+        ids.append(msg.sticker.file_id)
+    return ids
+
+
 @Bot.on_message(filters.command("setfile") & filters.private & admin)
 async def set_file_cmd(client: Bot, message: Message):
+    """Store a single file or entire media group under a numeric key.
+
+    Usage: /setfile <number>
+    Then send one file (or a media group)."""
     if len(message.command) != 2:
         return await message.reply_text(
-            "⚠️ Usage:\n`/setfile <number>`\nThen send multiple files or messages."
+            "⚠️ Usage:\n`/setfile <number>`\nThen send a single file or media group."
         )
 
     key = message.command[1].strip()
     if not key.isdigit():
         return await message.reply_text("❌ Only numbers are allowed as keys.")
 
+    STOP_KEYBOARD = ReplyKeyboardMarkup([["STOP"]], resize_keyboard=True)
+    await message.reply(
+        "📥 Send the file (single file or a media group).\n"
+        "If you send a media group (album), all items will be included.\n"
+        "Press STOP to cancel.",
+        reply_markup=STOP_KEYBOARD
+    )
+
+    try:
+        user_msg = await client.ask(
+            chat_id=message.chat.id,
+            text="Waiting for file...",
+            timeout=30  # wait 30 seconds for the file
+        )
+    except asyncio.TimeoutError:
+        return await message.reply("❌ Timeout. No file received.", reply_markup=ReplyKeyboardRemove())
+
+    if user_msg.text and user_msg.text.strip().upper() == "STOP":
+        return await message.reply("⏹ Operation cancelled.", reply_markup=ReplyKeyboardRemove())
+
+    # Collect file ids from the received message
+    file_ids = _extract_file_ids(user_msg)
+
+    # If this message is part of a media group, try to collect the rest of the group
+    if user_msg.media_group_id:
+        mgid = user_msg.media_group_id
+        # allow a short window to receive rest of the group (they usually arrive quickly)
+        while True:
+            try:
+                more = await client.ask(chat_id=message.chat.id, text="Waiting for rest of media group...", timeout=1)
+            except asyncio.TimeoutError:
+                break
+            if more.text and more.text.strip().upper() == "STOP":
+                break
+            # include items that belong to the same media_group
+            if getattr(more, "media_group_id", None) == mgid and more.from_user.id == user_msg.from_user.id:
+                file_ids.extend(_extract_file_ids(more))
+            else:
+                # if it's a different message, ignore it (user can re-send if needed)
+                continue
+
+    await message.reply("✅ Collection finished.", reply_markup=ReplyKeyboardRemove())
+
+    if not file_ids:
+        return await message.reply("❌ No valid media message was received and stored.")
+
+    for fid in file_ids:
+        await db.add_file_to_key(key, message.chat.id, fid)
+
+    await message.reply(f"✅ Stored {len(file_ids)} file(s) under key `{key}` successfully.")
+
+
+# =========================
+# /setfiles Command (Batch collection for a duration)
+# =========================
+@Bot.on_message(filters.command("setfiles") & filters.private & admin)
+async def set_files_batch(client: Bot, message: Message):
+    """Collect multiple files from the user for a specified duration (default 60s).
+
+    Usage: /setfiles <number> [seconds]
+    Example: /setfiles 123 60  (collect files for 60 seconds)
+    """
+    if len(message.command) not in (2, 3):
+        return await message.reply_text("⚠️ Usage:\n`/setfiles <number> [seconds]`\nExample: /setfiles 123 60")
+
+    key = message.command[1].strip()
+    if not key.isdigit():
+        return await message.reply_text("❌ Only numbers are allowed as keys.")
+
+    duration = 60
+    if len(message.command) == 3:
+        try:
+            duration = int(message.command[2])
+            if duration <= 0:
+                raise ValueError
+        except Exception:
+            return await message.reply_text("❌ Invalid duration. Provide time in seconds as a positive integer.")
+
     collected = []
     STOP_KEYBOARD = ReplyKeyboardMarkup([["STOP"]], resize_keyboard=True)
 
     await message.reply(
-        "📥 Send all media messages you want to include under this key.\n\n"
-        "Press STOP when you're done.",
+        f"📥 Send all files/media you want to include under key `{key}` within {duration} seconds.\n\nPress STOP to finish early.",
         reply_markup=STOP_KEYBOARD
     )
 
+    end_time = time.time() + duration
     while True:
+        remaining = end_time - time.time()
+        if remaining <= 0:
+            break
         try:
             user_msg = await client.ask(
                 chat_id=message.chat.id,
-                text="Waiting for media messages...\nPress STOP to finish.",
-                timeout=30  # wait 30 seconds for next input
+                text=f"Waiting for media... ({int(remaining)}s left)",
+                timeout=remaining
             )
         except asyncio.TimeoutError:
             break
 
-        # Stop condition
         if user_msg.text and user_msg.text.strip().upper() == "STOP":
             break
 
-        # Allow only media
-        if not (user_msg.document or user_msg.video or user_msg.audio or user_msg.photo):
+        # Extract file ids (supports media groups by capturing each message)
+        file_ids = _extract_file_ids(user_msg)
+        if not file_ids:
             await message.reply("❌ Unsupported message type, ignored.")
             continue
 
-        # Get file_id
-        if user_msg.document:
-            fid = user_msg.document.file_id
-        elif user_msg.video:
-            fid = user_msg.video.file_id
-        elif user_msg.audio:
-            fid = user_msg.audio.file_id
-        elif user_msg.photo:
-            fid = user_msg.photo[-1].file_id
-        else:
-            continue
+        for fid in file_ids:
+            collected.append((message.chat.id, fid))
 
-        collected.append((user_msg.chat.id, fid))
         await message.reply(f"✅ Added ({len(collected)} total)")
 
     await message.reply("✅ Collection finished.", reply_markup=ReplyKeyboardRemove())
@@ -158,6 +256,7 @@ async def set_file_cmd(client: Bot, message: Message):
 
     await message.reply(f"✅ All {len(collected)} files stored under key `{key}` successfully.")
 
+# =========================
 
 # =========================
 # /listfile Command

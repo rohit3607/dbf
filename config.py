@@ -67,7 +67,8 @@ CMD_TXT = """<blockquote><b>» ᴀᴅᴍɪɴ ᴄᴏᴍᴍᴀɴᴅs:</b></blockqu
 <b>›› /add_admin :</b> ᴀᴅᴅ ᴀɴ ᴀᴅᴍɪɴ
 <b>›› /deladmin :</b> ʀᴇᴍᴏᴠᴇ ᴀɴ ᴀᴅᴍɪɴ
 <b>›› /admins :</b> ɢᴇᴛ ʟɪsᴛ ᴏꜰ ᴀᴅᴍɪɴs
-<b>›› /setfile :</b> create keys for file
+<b>›› /setfile :</b> store a single file or media group under a key
+<b>›› /setfiles :</b> collect multiple files for a duration (default 60s)
 <b>›› /listfile :</b> check all files
 <b>›› /delfile :</b> Rᴇᴍᴏᴠᴇᴅ files
 """
