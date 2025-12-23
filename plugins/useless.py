@@ -260,7 +260,16 @@ async def set_files_batch(client: Bot, message: Message):
             # short buffer window to catch more media messages sent quickly
             try:
                 while True:
-                    nxt = await asyncio.wait_for(client.listen(chat_id=message.chat.id, user_id=user_msg.from_user.id), timeout=1.0)
+                    nxt = await asyncio.wait_for(client.listen(chat_id=message.chat.id), timeout=1.0)
+
+                    # If message is from another user, push back and keep waiting
+                    if not nxt.from_user or nxt.from_user.id != user_msg.from_user.id:
+                        try:
+                            client._queue[message.chat.id].put_nowait(nxt)
+                        except Exception:
+                            pass
+                        continue
+
                     # if it's part of a different media group, fetch the whole group
                     if getattr(nxt, "media_group_id", None):
                         try:
@@ -272,7 +281,10 @@ async def set_files_batch(client: Bot, message: Message):
                         msgs.append(nxt)
                     else:
                         # not a media message -> push back and stop buffering
-                        client._queue[message.chat.id].put_nowait(nxt)
+                        try:
+                            client._queue[message.chat.id].put_nowait(nxt)
+                        except Exception:
+                            pass
                         break
             except asyncio.TimeoutError:
                 pass
