@@ -50,16 +50,22 @@ class Rohit:
         self.rqst_fsub_Channel_data = self.database['request_forcesub_channel']
         self.file_store = self.database['file_store']
 
-    async def add_file_to_key(self, key: str, chat_id: int, file_id: int):
-        """Add or append a file to an existing key. If key doesn't exist, create it."""
-        await self.file_store.update_one(
-            {"key": key},
-            {
-                "$set": {"chat_id": chat_id},
-                "$addToSet": {"file_ids": file_id}
-            },
-            upsert=True
-        )
+    async def add_file_to_key(self, key: str, chat_id: int, file_id: int, caption: str = None, file_name: str = None, media_type: str = None):
+        """Add or append a file to an existing key. If key doesn't exist, create it.
+        Also stores optional caption and metadata for better resend with captions."""
+        update_doc = {
+            "$set": {"chat_id": chat_id},
+            "$addToSet": {"file_ids": file_id}
+        }
+        meta = {"file_id": file_id}
+        if caption is not None:
+            meta["caption"] = caption
+        if file_name is not None:
+            meta["file_name"] = file_name
+        if media_type is not None:
+            meta["media_type"] = media_type
+        update_doc["$addToSet"]["file_meta"] = meta
+        await self.file_store.update_one({"key": key}, update_doc, upsert=True)
 
     async def get_file(self, key: str):
         """Fetch file record by key. Always returns {key, chat_id, file_ids[]}"""
@@ -71,6 +77,24 @@ class Rohit:
             data["file_ids"] = [data["file_id"]]
             del data["file_id"]
         return data
+
+    async def key_exists(self, key: str):
+        """Check if a key record already exists."""
+        return bool(await self.file_store.find_one({"key": key}))
+
+    async def update_key_files(self, key: str, chat_id: int, file_ids: list, file_meta: list):
+        """Replace the files bound to a key with the provided set and metadata."""
+        await self.file_store.update_one(
+            {"key": key},
+            {
+                "$set": {
+                    "chat_id": chat_id,
+                    "file_ids": file_ids,
+                    "file_meta": file_meta
+                }
+            },
+            upsert=True
+        )
 
     async def delete_file(self, key: str):
         """Delete all files bound to a key."""
