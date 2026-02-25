@@ -139,6 +139,11 @@ async def set_file_cmd(client: Bot, message: Message):
     key = message.command[1].strip()
     if not key.isdigit():
         return await message.reply_text("❌ Only numbers are allowed as keys.")
+    # Prevent appending to an existing key
+    if await db.key_exists(key):
+        return await message.reply_text(
+            "⚠️ This key already exists.\nUse /edit to replace the files or /delfile to remove it."
+        )
 
     STOP_KEYBOARD = ReplyKeyboardMarkup([["STOP"]], resize_keyboard=True)
     await message.reply(
@@ -160,13 +165,19 @@ async def set_file_cmd(client: Bot, message: Message):
     if user_msg.text and user_msg.text.strip().upper() == "STOP":
         return await message.reply("⏹ Operation cancelled.", reply_markup=ReplyKeyboardRemove())
 
-    # Collect file ids from the received message
-    file_ids = _extract_file_ids(user_msg)
+    # Collect messages to extract media and captions
+    msgs = []
+    if user_msg.media_group_id:
+        try:
+            msgs = await client.get_media_group(chat_id=message.chat.id, message_id=user_msg.id)
+        except Exception:
+            msgs = [user_msg]
+    else:
+        msgs = [user_msg]
 
-    # If this message is part of a media group, try to collect the rest of the group
+    # If this message is part of a media group, try to collect the rest of the group quickly
     if user_msg.media_group_id:
         mgid = user_msg.media_group_id
-        # allow a short window to receive rest of the group (they usually arrive quickly)
         while True:
             try:
                 more = await client.ask(chat_id=message.chat.id, text="Waiting for rest of media group...", timeout=1)
@@ -174,252 +185,115 @@ async def set_file_cmd(client: Bot, message: Message):
                 break
             if more.text and more.text.strip().upper() == "STOP":
                 break
-            # include items that belong to the same media_group
             if getattr(more, "media_group_id", None) == mgid and more.from_user.id == user_msg.from_user.id:
-                file_ids.extend(_extract_file_ids(more))
+                msgs.append(more)
             else:
-                # if it's a different message, ignore it (user can re-send if needed)
                 continue
 
     await message.reply("✅ Collection finished.", reply_markup=ReplyKeyboardRemove())
 
-    if not file_ids:
+    if not msgs:
         return await message.reply("❌ No valid media message was received and stored.")
 
-    for fid in file_ids:
-        await db.add_file_to_key(key, message.chat.id, fid)
+    stored_count = 0
+    for m in msgs:
+        fids = _extract_file_ids(m)
+        if not fids:
+            continue
+        caption = m.caption.html if m.caption else None
+        media_type = (
+            "document" if m.document else
+            "video" if m.video else
+            "photo" if m.photo else
+            "audio" if m.audio else
+            "voice" if m.voice else
+            "animation" if m.animation else
+            "sticker" if m.sticker else
+            "unknown"
+        )
+        file_name = m.document.file_name if m.document else None
+        for fid in fids:
+            await db.add_file_to_key(key, message.chat.id, fid, caption=caption, file_name=file_name, media_type=media_type)
+            stored_count += 1
 
-    await message.reply(f"✅ Stored {len(file_ids)} file(s) under key `{key}` successfully.")
+    await message.reply(f"✅ Stored {stored_count} file(s) under key `{key}` successfully.")
 
 
 # =========================
-# /setfiles Command (Batch collection for a duration)
+# /setfiles Command (Channel-based batch collection)
 # =========================
 @Bot.on_message(filters.command("setfiles") & filters.private & admin)
 async def set_files_batch(client: Bot, message: Message):
-    """Collect multiple files from the user for a specified duration (default 60s).
+    """Collect a range of posts from the DB channel and store under a key.
 
-    Usage: /setfiles <number> [seconds]
-    Example: /setfiles 123 60  (collect files for 60 seconds)
+    Usage: /setfiles <number>
+    Then forward the FIRST and LAST posts from the DB channel (or send their links).
     """
-    if len(message.command) not in (2, 3):
-        return await message.reply_text("⚠️ Usage:\n`/setfiles <number> [seconds]`\nExample: /setfiles 123 60")
+    if len(message.command) != 2:
+        return await message.reply_text("⚠️ Usage:\n`/setfiles <number>`\nThen forward FIRST and LAST DB channel posts.")
 
     key = message.command[1].strip()
     if not key.isdigit():
         return await message.reply_text("❌ Only numbers are allowed as keys.")
-
-    duration = 60
-    if len(message.command) == 3:
-        try:
-            duration = int(message.command[2])
-            if duration <= 0:
-                raise ValueError
-        except Exception:
-            return await message.reply_text("❌ Invalid duration. Provide time in seconds as a positive integer.")
-
-    collected = []
-    cached_files = []  # keep track of downloaded cache paths to clean up later
-    STOP_KEYBOARD = ReplyKeyboardMarkup([["STOP"]], resize_keyboard=True)
+    # Prevent appending to an existing key
+    if await db.key_exists(key):
+        return await message.reply_text(
+            "⚠️ This key already exists.\nUse /edit to replace the files or /delfile to remove it."
+        )
 
     await message.reply(
-        f"📥 Send all files/media you want to include under key `{key}` within {duration} seconds.\n\nPress STOP to finish early.",
-        reply_markup=STOP_KEYBOARD
+        f"📥 Forward the FIRST post from <a href='{client.db_channel.invite_link}'>DB Channel</a>.",
+        disable_web_page_preview=True
     )
+    try:
+        first = await client.ask(chat_id=message.chat.id, text="Waiting for FIRST DB channel post...", timeout=60)
+    except asyncio.TimeoutError:
+        return await message.reply("❌ Timeout. No message received.")
+    f_msg_id = await get_message_id(client, first)
+    if not f_msg_id:
+        return await message.reply("❌ That message isn't from the DB channel.")
 
-    end_time = time.time() + duration
-    while True:
-        remaining = end_time - time.time()
-        if remaining <= 0:
-            break
-        try:
-            user_msg = await client.ask(
-                chat_id=message.chat.id,
-                text=f"Waiting for media... ({int(remaining)}s left)",
-                timeout=remaining
-            )
-        except asyncio.TimeoutError:
-            break
+    try:
+        last = await client.ask(chat_id=message.chat.id, text="Now forward the LAST DB channel post...", timeout=60)
+    except asyncio.TimeoutError:
+        return await message.reply("❌ Timeout. No message received.")
+    s_msg_id = await get_message_id(client, last)
+    if not s_msg_id:
+        return await message.reply("❌ That message isn't from the DB channel.")
 
-        if user_msg.text and user_msg.text.strip().upper() == "STOP":
-            break
+    start = min(f_msg_id, s_msg_id)
+    end = max(f_msg_id, s_msg_id)
 
-        # Check if user provided a forwarded/channel post (channel batch mode)
-        f_msg_id = await get_message_id(client, user_msg)
-        if f_msg_id:
-            # Ask for the last message in the range
-            try:
-                snd = await client.ask(
-                    chat_id=message.chat.id,
-                    text=f"Forward the LAST message from <a href='{client.db_channel.invite_link}'>DB Channel</a> or send its post link.",
-                    timeout=60,
-                    disable_web_page_preview=True
-                )
-            except Exception:
-                await message.reply("❌ Timeout while waiting for the last message.")
-                break
+    MAX_RANGE = 2000
+    if end - start + 1 > MAX_RANGE:
+        return await message.reply(f"❌ Range too large ({end-start+1}). Please limit to {MAX_RANGE} messages.")
 
-            s_msg_id = await get_message_id(client, snd)
-            if not s_msg_id:
-                await snd.reply("❌ That message isn't from the DB channel. Operation cancelled.")
-                break
+    msg_ids = list(range(start, end + 1))
+    msgs = await get_messages(client, msg_ids)
 
-            # Normalize range
-            start = min(f_msg_id, s_msg_id)
-            end = max(f_msg_id, s_msg_id)
-
-            # Safety limit
-            MAX_RANGE = 2000
-            if end - start + 1 > MAX_RANGE:
-                return await message.reply(f"❌ Range too large ({end-start+1} messages). Please limit to {MAX_RANGE} messages.")
-
-            msg_ids = list(range(start, end + 1))
-            # Fetch messages from the DB channel
-            msgs = await get_messages(client, msg_ids)
-
-            total_added = 0
-            for m in msgs:
-                fids = _extract_file_ids(m)
-                for fid in fids:
-                    await db.add_file_to_key(key, client.db_channel.id, fid)
-                    total_added += 1
-
-            await message.reply(f"✅ Stored {total_added} files from channel posts under key `{key}` successfully.")
-            return
-
-        # Prepare per-user cache directory
-        cache_dir = os.path.join("cache", str(message.chat.id), str(user_msg.from_user.id))
-        os.makedirs(cache_dir, exist_ok=True)
-
-        # Collect messages (single or media group) and also catch quick additional single media messages
-        msgs = []
-        if user_msg.media_group_id:
-            try:
-                msgs = await client.get_media_group(chat_id=message.chat.id, message_id=user_msg.id)
-            except Exception:
-                msgs = [user_msg]
-        else:
-            msgs = [user_msg]
-
-            # Buffer window to catch more media messages sent quickly (increase to 2s)
-            BUFFER_WINDOW = 2.0
-            buffer_deadline = time.time() + BUFFER_WINDOW
-
-            try:
-                while True:
-                    timeout = buffer_deadline - time.time()
-                    if timeout <= 0:
-                        break
-
-                    nxt = await asyncio.wait_for(client.listen(chat_id=message.chat.id), timeout=timeout)
-
-                    # Only accept messages from the same sender; push back others
-                    if not nxt.from_user or nxt.from_user.id != user_msg.from_user.id:
-                        try:
-                            client._queue[message.chat.id].put_nowait(nxt)
-                        except Exception:
-                            pass
-                        continue
-
-                    # if it's part of a media group, fetch the whole group
-                    if getattr(nxt, "media_group_id", None):
-                        try:
-                            grp = await client.get_media_group(chat_id=message.chat.id, message_id=nxt.id)
-                            msgs.extend(grp)
-                        except Exception:
-                            msgs.append(nxt)
-                    elif (nxt.video or nxt.document or nxt.photo or nxt.audio or nxt.voice or nxt.animation):
-                        msgs.append(nxt)
-                    else:
-                        # non-media message from same user -> push back and continue listening
-                        try:
-                            client._queue[message.chat.id].put_nowait(nxt)
-                        except Exception:
-                            pass
-                        continue
-            except asyncio.TimeoutError:
-                pass
-
-            # Fallback: scan recent chat history for any missing quick messages by the same user
-            try:
-                history = await client.get_chat_history(chat_id=message.chat.id, limit=50)
-            except Exception:
-                history = []
-
-            for m in history:
-                if m.message_id <= user_msg.message_id:
-                    continue
-                if not m.from_user or m.from_user.id != user_msg.from_user.id:
-                    continue
-                # If message already collected, skip
-                if any(getattr(x, 'message_id', None) == m.message_id for x in msgs):
-                    continue
-
-                if getattr(m, "media_group_id", None):
-                    try:
-                        grp = await client.get_media_group(chat_id=message.chat.id, message_id=m.id)
-                        for gm in grp:
-                            if not any(getattr(x, 'message_id', None) == gm.message_id for x in msgs):
-                                msgs.append(gm)
-                    except Exception:
-                        if (m.video or m.document or m.photo or m.audio or m.voice or m.animation):
-                            msgs.append(m)
-                elif (m.video or m.document or m.photo or m.audio or m.voice or m.animation):
-                    msgs.append(m)
-
-        # Process collected msgs and download supported media into cache
-        batch_added = 0
-        for m in msgs:
-            fids = _extract_file_ids(m)
-            if not fids:
-                continue
-
-            # Try to download the message media into cache (filename prefix ensures uniqueness)
-            try:
-                saved = await client.download_media(m, file_name=os.path.join(cache_dir, f"{user_msg.from_user.id}_{m.message_id}"))
-                if saved:
-                    cached_files.append(saved)
-            except Exception:
-                saved = None
-
-            for fid in fids:
-                collected.append((message.chat.id, fid))
-                batch_added += 1
-
-        if batch_added == 0:
-            await message.reply("❌ Unsupported message type, ignored.")
+    total_added = 0
+    for m in msgs:
+        fids = _extract_file_ids(m)
+        if not fids:
             continue
+        caption = m.caption.html if m.caption else None
+        media_type = (
+            "document" if m.document else
+            "video" if m.video else
+            "photo" if m.photo else
+            "audio" if m.audio else
+            "voice" if m.voice else
+            "animation" if m.animation else
+            "sticker" if m.sticker else
+            "unknown"
+        )
+        file_name = m.document.file_name if m.document else None
+        for fid in fids:
+            await db.add_file_to_key(key, client.db_channel.id, fid, caption=caption, file_name=file_name, media_type=media_type)
+            total_added += 1
 
-        await message.reply(f"✅ Added ({len(collected)} total)")
-
-    await message.reply("✅ Collection finished.", reply_markup=ReplyKeyboardRemove())
-
-    if not collected:
-        return await message.reply("❌ No valid media messages were added.")
-
-    # Store all collected file_ids under key
-    for chat_id, fid in collected:
-        await db.add_file_to_key(key, chat_id, fid)
-
-    # Cleanup cached files
-    for path in cached_files:
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
-
-    await message.reply(f"✅ All {len(collected)} files stored under key `{key}` successfully.")
-
-    # Cleanup cached files
-    for path in cached_files:
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
-
-    await message.reply("✅ Collection finished.", reply_markup=ReplyKeyboardRemove())
+    await message.reply(f"✅ Stored {total_added} files from DB channel under key `{key}` successfully.")
+    return
 
 # =========================
 
@@ -457,6 +331,127 @@ async def delete_file_cmd(client: Bot, message: Message):
 
     await message.reply_text(f"🗑 Deleted all files under key `{key}` successfully.")
 
+
+# =========================
+# /edit Command (Replace files under a key)
+# =========================
+@Bot.on_message(filters.command("edit") & filters.private & admin)
+async def edit_file_cmd(client: Bot, message: Message):
+    if len(message.command) != 2:
+        return await message.reply_text("⚠️ Usage:\n`/edit <number>`")
+    key = message.command[1].strip()
+    if not key.isdigit():
+        return await message.reply_text("❌ Only numbers are allowed as keys.")
+    existing = await db.get_file(key)
+    if not existing:
+        return await message.reply_text("❌ No existing files for this key. Use /setfile or /setfiles first.")
+
+    STOP_KEYBOARD = ReplyKeyboardMarkup([["STOP"]], resize_keyboard=True)
+    await message.reply(
+        "📥 Send new files or forward FIRST and LAST DB channel posts to replace.\n"
+        "Press STOP to cancel.",
+        reply_markup=STOP_KEYBOARD
+    )
+    try:
+        first = await client.ask(chat_id=message.chat.id, text="Waiting for media or forwarded post...", timeout=60)
+    except asyncio.TimeoutError:
+        return await message.reply("❌ Timeout. No input received.", reply_markup=ReplyKeyboardRemove())
+    if first.text and first.text.strip().upper() == "STOP":
+        return await message.reply("⏹ Operation cancelled.", reply_markup=ReplyKeyboardRemove())
+
+    # Try channel-based edit if forwarded
+    f_msg_id = await get_message_id(client, first)
+    file_ids = []
+    file_meta = []
+    if f_msg_id:
+        try:
+            last = await client.ask(chat_id=message.chat.id, text="Forward the LAST DB channel post...", timeout=60)
+        except asyncio.TimeoutError:
+            return await message.reply("❌ Timeout. No message received.", reply_markup=ReplyKeyboardRemove())
+        s_msg_id = await get_message_id(client, last)
+        if not s_msg_id:
+            return await message.reply("❌ That message isn't from the DB channel.", reply_markup=ReplyKeyboardRemove())
+        start = min(f_msg_id, s_msg_id)
+        end = max(f_msg_id, s_msg_id)
+        MAX_RANGE = 2000
+        if end - start + 1 > MAX_RANGE:
+            return await message.reply(f"❌ Range too large ({end-start+1}). Please limit to {MAX_RANGE} messages.", reply_markup=ReplyKeyboardRemove())
+        msg_ids = list(range(start, end + 1))
+        msgs = await get_messages(client, msg_ids)
+        for m in msgs:
+            fids = _extract_file_ids(m)
+            if not fids:
+                continue
+            caption = m.caption.html if m.caption else None
+            media_type = (
+                "document" if m.document else
+                "video" if m.video else
+                "photo" if m.photo else
+                "audio" if m.audio else
+                "voice" if m.voice else
+                "animation" if m.animation else
+                "sticker" if m.sticker else
+                "unknown"
+            )
+            file_name = m.document.file_name if m.document else None
+            for fid in fids:
+                file_ids.append(fid)
+                file_meta.append({"file_id": fid, "caption": caption, "file_name": file_name, "media_type": media_type})
+        await db.update_key_files(key, client.db_channel.id, file_ids, file_meta)
+        await message.reply(f"✅ Replaced files under key `{key}` successfully.", reply_markup=ReplyKeyboardRemove())
+        return
+
+    # Otherwise treat as direct media replacement
+    msgs = []
+    if first.media_group_id:
+        try:
+            msgs = await client.get_media_group(chat_id=message.chat.id, message_id=first.id)
+        except Exception:
+            msgs = [first]
+    else:
+        msgs = [first]
+    # Buffer small window to collect additional direct media
+    BUFFER_WINDOW = 2.0
+    deadline = time.time() + BUFFER_WINDOW
+    while True:
+        try:
+            timeout = deadline - time.time()
+            if timeout <= 0:
+                break
+            nxt = await asyncio.wait_for(client.listen(chat_id=message.chat.id), timeout=timeout)
+        except asyncio.TimeoutError:
+            break
+        if nxt.text and nxt.text.strip().upper() == "STOP":
+            break
+        if getattr(nxt, "media_group_id", None):
+            try:
+                grp = await client.get_media_group(chat_id=message.chat.id, message_id=nxt.id)
+                msgs.extend(grp)
+            except Exception:
+                msgs.append(nxt)
+        elif (nxt.video or nxt.document or nxt.photo or nxt.audio or nxt.voice or nxt.animation):
+            msgs.append(nxt)
+    for m in msgs:
+        fids = _extract_file_ids(m)
+        if not fids:
+            continue
+        caption = m.caption.html if m.caption else None
+        media_type = (
+            "document" if m.document else
+            "video" if m.video else
+            "photo" if m.photo else
+            "audio" if m.audio else
+            "voice" if m.voice else
+            "animation" if m.animation else
+            "sticker" if m.sticker else
+            "unknown"
+        )
+        file_name = m.document.file_name if m.document else None
+        for fid in fids:
+            file_ids.append(fid)
+            file_meta.append({"file_id": fid, "caption": caption, "file_name": file_name, "media_type": media_type})
+    await db.update_key_files(key, message.chat.id, file_ids, file_meta)
+    await message.reply(f"✅ Replaced files under key `{key}` successfully.", reply_markup=ReplyKeyboardRemove())
 
 # =========================
 # Auto Send by Key
@@ -551,8 +546,35 @@ async def send_saved_file(client: Bot, message: Message):
 
     try:
         sent_msgs = []
+        # Build metadata map if available
+        meta_map = {}
+        for meta in data.get("file_meta", []) or []:
+            fid = meta.get("file_id")
+            if fid:
+                meta_map[fid] = meta
         for fid in data["file_ids"]:
-            sent = await client.send_cached_media(chat_id=message.chat.id, file_id=fid)
+            meta = meta_map.get(fid, {})
+            mtype = meta.get("media_type")
+            prev_caption = meta.get("caption") or ""
+            filename = meta.get("file_name")
+            caption = None
+            if mtype == "document":
+                if CUSTOM_CAPTION:
+                    try:
+                        caption = CUSTOM_CAPTION.format(previouscaption=prev_caption, filename=filename)
+                    except Exception:
+                        caption = CUSTOM_CAPTION
+                else:
+                    caption = prev_caption or None
+            else:
+                caption = prev_caption or None
+            sent = await client.send_cached_media(
+                chat_id=message.chat.id,
+                file_id=fid,
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+                protect_content=PROTECT_CONTENT
+            )
             sent_msgs.append(sent)
 
         if FILE_AUTO_DELETE > 0:
