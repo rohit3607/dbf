@@ -19,6 +19,9 @@ def get_indian_time():
     ist = pytz.timezone("Asia/Kolkata")
     return datetime.now(ist)
 
+import pyrogram.utils
+
+pyrogram.utils.MIN_CHANNEL_ID = -1009147483647
 
 
 class Bot(Client):
